@@ -8,12 +8,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        git: [[master, ubuntu-latest], [v2.11.0, ubuntu-latest]]
+        git: [[master, ubuntu-24.04], [v2.11.0, ubuntu-24.04]]
 
     runs-on: ${{ matrix.git[1] }}
     env:
-        GIT_VERSION: ${{ matrix.git[0] }}
-        GIT_DIST_PATH: .git-dist/${{ matrix.git[0] }}
+      GIT_VERSION: ${{ matrix.git[0] }}
+      GIT_DIST_PATH: .git-dist/${{ matrix.git[0] }}
 
     steps:
     - name: Checkout code
@@ -38,7 +38,7 @@ jobs:
         git --exec-path
         git config --global user.email "gha@example.com"
         git config --global user.name "GitHub Actions"
- 
+
     - name: Test
       run: make test-coverage
 

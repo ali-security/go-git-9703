@@ -1,4 +1,4 @@
-name: 'PR Validation'
+name: PR Validation
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ permissions:
 jobs:
   check-commit-message:
     name: Check Commit Messages
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Check Package Prefix
         uses: gsactions/commit-message-checker@v2

@@ -1,17 +1,14 @@
-name: "CodeQL"
+name: CodeQL
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [master, main]
   pull_request:
-    branches: [ "master" ]
-  schedule:
-    - cron: '00 5 * * 1'
-
+    branches: [master, main]
 jobs:
   analyze:
     name: Analyze
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
@@ -20,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'go' ]
+        language: [go]
 
     steps:
       - name: Checkout code
@@ -41,4 +38,4 @@ jobs:
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@1f86f55dce064513e2111b0d4fc7cfb11444c092 # v2.22.11
         with:
-          category: "/language:${{matrix.language}}"
+          category: /language:${{matrix.language}}
