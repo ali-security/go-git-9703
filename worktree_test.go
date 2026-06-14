@@ -24,6 +24,7 @@ import (
 	"github.com/go-git/go-git/v5/storage/filesystem"
 	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
@@ -473,6 +474,60 @@ func (s *WorktreeSuite) TestCheckoutSymlink(c *C) {
 	target, err := w.Filesystem.Readlink("bar")
 	c.Assert(target, Equals, "not-exists")
 	c.Assert(err, IsNil)
+}
+
+func TestCheckoutSymlinkArbitraryTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("git doesn't support symlinks by default in windows")
+	}
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{name: "rel", target: "target"},
+		{name: "absolute", target: "/etc/passwd"},
+		{name: "dot-dot relative", target: "../../outside"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			wtFS := osfs.New(dir, osfs.WithBoundOS())
+
+			dotFS, err := wtFS.Chroot(".git")
+			require.NoError(t, err)
+			storage := filesystem.NewStorage(dotFS, cache.NewObjectLRUDefault())
+
+			r, err := Init(storage, wtFS)
+			require.NoError(t, err)
+
+			w, err := r.Worktree()
+			require.NoError(t, err)
+
+			require.NoError(t, w.Filesystem.Symlink(tc.target, "link"))
+			_, err = w.Add("link")
+			require.NoError(t, err)
+			_, err = w.Commit("add symlink", &CommitOptions{Author: defaultSignature()})
+			require.NoError(t, err)
+
+			require.NoError(t, r.Storer.SetIndex(&index.Index{Version: 2}))
+			w.Filesystem = newWorktreeFilesystem(
+				osfs.New(filepath.Join(dir, "worktree-empty")), true, true)
+
+			require.NoError(t, w.Checkout(&CheckoutOptions{}))
+
+			_, err = w.Status()
+			require.NoError(t, err)
+
+			got, err := w.Filesystem.Readlink("link")
+			require.NoError(t, err)
+			assert.Equal(t, tc.target, got)
+		})
+	}
 }
 
 func (s *WorktreeSuite) TestCheckoutSparse(c *C) {
@@ -2081,7 +2136,6 @@ func (s *WorktreeSuite) TestAddFilenameStartingWithDot(c *C) {
 	file = status.File("foo/bar/baz")
 	c.Assert(file.Staging, Equals, Added)
 	c.Assert(file.Worktree, Equals, Unmodified)
-
 }
 
 func (s *WorktreeSuite) TestAddGlobErrorNoMatches(c *C) {
@@ -2449,7 +2503,6 @@ func (s *WorktreeSuite) TestMove(c *C) {
 	c.Assert(status, HasLen, 2)
 	c.Assert(status.File("LICENSE").Staging, Equals, Deleted)
 	c.Assert(status.File("foo").Staging, Equals, Added)
-
 }
 
 func (s *WorktreeSuite) TestMoveNotExistentEntry(c *C) {
@@ -3119,11 +3172,11 @@ func TestValidPath(t *testing.T) {
 		{".gitmodules", false},
 		{".gitignore", false},
 		{"a..b", false},
-		{".", false},
+		{".", true},
+		{"a/.git/b", true},
+		{"a\\.git\\b", true},
 		{"a/.git", false},
 		{"a\\.git", false},
-		{"a/.git/b", false},
-		{"a\\.git\\b", false},
 	}
 
 	if runtime.GOOS == "windows" {
@@ -3138,9 +3191,10 @@ func TestValidPath(t *testing.T) {
 		}...)
 	}
 
+	fs := newWorktreeFilesystem(nil, defaultProtectNTFS(), defaultProtectHFS())
 	for _, tc := range tests {
 		t.Run(tc.path, func(t *testing.T) {
-			err := validPath(tc.path)
+			err := fs.validPath(tc.path)
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -3150,29 +3204,27 @@ func TestValidPath(t *testing.T) {
 	}
 }
 
-func TestWindowsValidPath(t *testing.T) {
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{".git", false},
-		{".git . . .", false},
-		{".git ", false},
-		{".git  ", false},
-		{".git . .", false},
-		{".git . .", false},
-		{".git::$INDEX_ALLOCATION", false},
-		{".git:", false},
-		{"a", true},
-		{"a\\b", true},
-		{"a/b", true},
-		{".gitm", true},
-	}
+// TestWorktreeFilesystemMkdirAllRootIsNoop locks in the contract that
+// MkdirAll on a root-equivalent path is a silent no-op against the
+// wrapper. validPath itself still rejects "", ".", and "/" (see
+// TestValidPath), but MkdirAll specifically tolerates them because
+// "ensure the root exists" is always trivially satisfied.
+func TestWorktreeFilesystemMkdirAllRootIsNoop(t *testing.T) {
+	t.Parallel()
 
-	for _, tc := range tests {
-		t.Run(tc.path, func(t *testing.T) {
-			got := windowsValidPath(tc.path)
-			assert.Equal(t, tc.want, got)
+	rootPaths := []string{"", ".", "/"}
+	for _, p := range rootPaths {
+		t.Run(p, func(t *testing.T) {
+			t.Parallel()
+
+			mfs := memfs.New()
+			fs := newWorktreeFilesystem(mfs, true, true)
+
+			require.NoError(t, fs.MkdirAll(p, 0o755))
+
+			entries, err := mfs.ReadDir("/")
+			require.NoError(t, err)
+			assert.Empty(t, entries, "MkdirAll(%q) must not materialise a directory entry", p)
 		})
 	}
 }
@@ -3348,7 +3400,6 @@ func (s *WorktreeSuite) TestRestoreBoth(c *C) {
 }
 
 func TestFilePermissions(t *testing.T) {
-
 	// Initialize an in memory repository
 	remoteUrl := t.TempDir()
 
@@ -3405,5 +3456,4 @@ func TestFilePermissions(t *testing.T) {
 		assert.Equal(t, expectedEntry.Name, idx.Entries[i].Name)
 		assert.Equal(t, expectedEntry.Mode, idx.Entries[i].Mode)
 	}
-
 }
